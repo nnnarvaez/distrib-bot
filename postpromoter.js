@@ -359,6 +359,14 @@ function getTransactions(callback) {
           if (op[0] == 'transfer' && op[1].to == account.name) {
             var amount = parseFloat(op[1].amount);
             var currency = utils.getCurrency(op[1].amount);
+            
+            //search for liquid steem to reserve
+            if(op[1].memo.substring(0,8).toLowerCase() == 'transfer'){
+              if(currency == 'STEEM') steem_reserve_balance += amount;                
+              if(currency == 'SBD') sbd_reserve_balance += amount;                
+              addToDebt(op[1].from,amount,currency);
+            }else{
+            
             utils.log("Incoming Bid! From: " + op[1].from + ", Amount: " + op[1].amount + ", memo: " + op[1].memo);
 
             // Check for min and max bid values in configuration settings
