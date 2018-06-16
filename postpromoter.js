@@ -138,64 +138,15 @@ function startup() {
     app.listen(port, () => utils.log('API running on port ' + port))
   }
 
-  // Check if bot state has been saved to disk, in which case load it
-  if (fs.existsSync('state.json')) {
-    var state = JSON.parse(fs.readFileSync("state.json"));
+  // Load data from firebase database
+  loadFirebase();
 
-    if (state.last_trans)
-      last_trans = state.last_trans;
-
-    if (state.outstanding_bids)
-      outstanding_bids = state.outstanding_bids;
-
-    if (state.last_round)
-      last_round = state.last_round;
-
-    if (state.next_round)
-      next_round = state.next_round;
-
-    if(state.last_withdrawal)
-      last_withdrawal = state.last_withdrawal;
-      
-    if(state.sbd_balance)
-      sbd_balance = parseFloat(state.sbd_balance);
-      
-    if(state.steem_balance)
-      steem_balance = parseFloat(state.steem_balance);
-
-		// Removed this for now since api.steemit.com is not returning more than 30 days of account history!
-    //if(state.version != version)
-    //  updateVersion(state.version, version);
-
-    utils.log('Restored saved bot state: ' + JSON.stringify({ last_trans: last_trans, bids: outstanding_bids.length, last_withdrawal: last_withdrawal, sbd_balance: sbd_balance, steem_balance: steem_balance }));
-  }
 
   // Check whether or not auto-withdrawals are set to be paid to delegators.
-  use_delegators = config.auto_withdrawal && config.auto_withdrawal.active && config.auto_withdrawal.accounts.find(a => a.name == '$delegators');
+  
 
   // If so then we need to load the list of delegators to the account
-  if(use_delegators) {
-    if(fs.existsSync('delegators.json')) {
-      delegators = JSON.parse(fs.readFileSync("delegators.json"));
-
-      var vests = delegators.reduce(function (total, v) { return total + parseFloat(v.vesting_shares); }, 0);
-      utils.log('Delegators Loaded (from disk) - ' + delegators.length + ' delegators and ' + vests + ' VESTS in total!');
-    }
-    else
-    {
-      var del = require('./delegators');
-      utils.log('Started loading delegators from account history...');
-      del.loadDelegations(config.account, function(d) {
-        delegators = d;
-        var vests = delegators.reduce(function (total, v) { return total + parseFloat(v.vesting_shares); }, 0);
-        utils.log('Delegators Loaded (from account history) - ' + delegators.length + ' delegators and ' + vests + ' VESTS in total!');
-
-        // Save the list of delegators to disk
-        saveDelegators();
-      });
-    }
-  }
-
+  
   // Schedule to run every 10 seconds
   setInterval(startProcess, 10000);
 
