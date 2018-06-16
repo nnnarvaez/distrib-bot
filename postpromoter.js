@@ -1,6 +1,8 @@
 var fs = require("fs");
 const steem = require('steem');
 var utils = require('./utils');
+var firebase = require('firebase-admin');
+var firebaseServiceAccount = require('./firebase-credentials.json');
 
 var account = null;
 var sbd_balance = 0;
@@ -23,6 +25,85 @@ var sbd_price = 1;    // This will get overridden with actual prices if a price_
 var version = '1.9.3';
 
 startup();
+
+function loadFirebase() {
+  firebase.initializeApp({
+    credential: firebase.credential.cert(firebaseServiceAccount),
+    databaseURL: 'https://steem-bid-bot.firebaseio.com/'
+  });
+  
+  utils.log("Firebase started");
+  
+  var ref = firebase.database().ref(config.account);
+  
+  //Whitelist
+  ref.child('whitelist').once('value').then(function(snapshot) {
+    whitelist = snapshot.val();
+    startEventsOnWhitelist();
+  });
+  
+  //State
+  ref.child('state').once('value').then(function(snapshot){
+    state = snapshot.val();
+    loadState();
+  });
+  
+  ref.child('state/roi').on('value', function(data) {
+    roi = data.val();
+    utils.log("roi update: "+roi);
+  });
+  
+  ref.child('max_bid_sbd').on('value', function(data){
+    max_bid_sbd = data.val();
+    utils.log("max bid update: "+max_bid_sbd+" sbd");
+  });
+  
+  ref.child('min_bid_sbd').on('value', function(data){
+    min_bid_sbd = data.val();
+    utils.log("min bid update: "+min_bid_sbd+" sbd");
+  });
+  
+  //Delegators
+  use_delegators = config.auto_withdrawal && config.auto_withdrawal.active && config.auto_withdrawal.accounts.find(a => a.name == '$delegators');
+  
+  if(use_delegators) {
+    ref.child('delegators').once('value').then(function(snapshot){
+      if(snapshot.val() != null) delegators = snapshot.val();
+
+      //var vests = delegators.reduce(function (total, v) { return total + parseFloat(v.vesting_shares); }, 0);
+      var vests = 0;
+      var length = 0;
+      for(var d in delegators){
+        if(delegators[d].vesting_shares){
+          var vs = parseFloat(delegators[d].vesting_shares);
+          if(vs >= 0){
+            vests += vs;
+            length++;
+          }  
+        }
+      }  
+      utils.log('Delegators Loaded (from firebase) - ' + length + ' delegators and ' + vests + ' VESTS in total!');
+    });
+  }
+}  
+
+function startEventsOnWhitelist(){
+  var ref = firebase.database().ref(config.account+'/whitelist');
+  
+  ref.on('child_added', function(data) {
+    whitelist[data.key] = data.val();    
+  });
+  
+  ref.on('child_removed', function(data) {
+    utils.log("account removed from whitelist: "+data.key);
+    delete whitelist[data.key];    
+  });
+  
+  firebase.database().ref(config.account+'/delegators').on('child_changed', function(data) {
+    delegators[data.key] = data.val();
+    utils.log("Delegator @"+data.key+" updated his preferences: sbd_reward_percentage: "+data.val().sbd_reward_percentage+", curation_reward_percentage: "+data.val().curation_reward_percentage);
+  });
+}
 
 function startup() {
   // Load the settings from the config file
@@ -667,11 +748,11 @@ function saveState() {
     version: version
   };
 
-  // Save the state of the bot to disk
-  fs.writeFile('state.json', JSON.stringify(state), function (err) {
-    if (err)
-      utils.log(err);
-  });
+  firebase.database().ref(config.account+'/state').set(state);
+}
+
+function saveAccount(){
+  firebase.database().ref(config.account+'/account').set(account);
 }
 
 function updateVersion(old_version, new_version) {
