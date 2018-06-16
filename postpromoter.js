@@ -183,13 +183,11 @@ function startProcess() {
 						isVoting = first_load = true;
 
 						// Make a copy of the list of outstanding bids and vote on them
-						startVoting(outstanding_bids.slice().reverse());
-
-						// Save the last round of bids for use in API call
-						last_round = outstanding_bids.slice();
-
-						// Some bids might have been pushed to the next round, so now move them to the current round
-						outstanding_bids = next_round.slice();
+						//startVoting(outstanding_bids.slice().reverse());
+                        startVoting(outstanding_bids[0]);
+                        
+						//remove bid from outstanding bids
+						//outstanding_bids.splice(0,1);
 
 						// Reset the next round
 						next_round = [];
@@ -199,7 +197,7 @@ function startProcess() {
 							processWithdrawals();
 
 						// Save the state of the bot to disk
-						saveState();
+						//saveState();
 					}, 30 * 1000);
 				}
 
