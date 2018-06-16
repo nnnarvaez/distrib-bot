@@ -815,10 +815,21 @@ function processWithdrawals() {
   if(config.backup_mode)
     return;
 
+  var liquid_steem_power = steem_reserve_balance >= steem_power_balance ? steem_power_balance : steem_reserve_balance;
   var has_sbd = config.currencies_accepted.indexOf('SBD') >= 0 && sbd_balance > 0;
   var has_steem = config.currencies_accepted.indexOf('STEEM') >= 0 && steem_balance > 0;
+  var has_steem_power = liquid_steem_power > 0; 
+  utils.log("Withdrawals. sbd_balance="+sbd_balance+"  steem_balance="+steem_balance+"  liquid_steem_power="+liquid_steem_power);
 
-  if (has_sbd || has_steem) {
+  var sbd_bal = parseFloat(account.sbd_balance);
+  var sbd_bal = sbd_balance >= sbd_bal ? sbd_bal : sbd_balance;
+  var steem_bal = parseFloat(account.balance) - liquid_steem_power;
+  var steem_bal = steem_bal < 0 ? 0 : steem_bal;
+  var steem_bal = steem_balance >= steem_bal ? steem_bal : steem_balance;
+  
+  utils.log("Withdrawals. sbd_bal="+sbd_bal+"  steem_bal="+steem_bal+"  liquid_steem_power="+liquid_steem_power);
+
+  if (has_sbd || has_steem || has_steem_power) {
 
     // Save the date of the last withdrawal
     last_withdrawal = new Date().toDateString();
@@ -832,65 +843,66 @@ function processWithdrawals() {
 
       // If this is the special $delegators account, split it between all delegators to the bot
       if(withdrawal_account.name == '$delegators') {
-        // Check if/where we should send payout for SP in the bot account directly
-        if(withdrawal_account.overrides) {
-          var bot_override = withdrawal_account.overrides.find(o => o.name == config.account);
-
-          if(bot_override && bot_override.beneficiary) {
-            var bot_delegator = delegators.find(d => d.delegator == config.account);
-
-            // Calculate the amount of SP in the bot account and add/update it in the list of delegators
-            var bot_vesting_shares = (parseFloat(account.vesting_shares) - parseFloat(account.delegated_vesting_shares)).toFixed(6) + ' VESTS';
-
-            if(bot_delegator)
-              bot_delegator.vesting_shares = bot_vesting_shares;
-            else
-              delegators.push({ delegator: config.account, vesting_shares: bot_vesting_shares });
+        
+        // Get the total amount delegated by all delegators
+        //var total_vests = delegators.reduce(function (total, v) { return total + parseFloat(v.vesting_shares); }, 0);
+        var total_vests = 0;
+        for(var d in delegators){
+          if(delegators[d].vesting_shares){
+            var vs = parseFloat(delegators[d].vesting_shares);
+            if(vs >= 0) total_vests += vs;
           }
         }
 
-        // Get the total amount delegated by all delegators
-        var total_vests = delegators.reduce(function (total, v) { return total + parseFloat(v.vesting_shares); }, 0);
-
         // Send the withdrawal to each delegator based on their delegation amount
-        for(var j = 0; j < delegators.length; j++) {
-          var delegator = delegators[j];
-          var to_account = delegator.delegator;
-
-          // Check if this delegator has an override and if so send the payment to the beneficiary instead
-          if(withdrawal_account.overrides) {
-            var override = withdrawal_account.overrides.find(o => o.name == to_account);
-
-            if(override && override.beneficiary)
-              to_account = override.beneficiary;
-          }
+        //for(var j = 0; j < delegators.length; j++) {
+        for(var d in delegators){
+          var delegator = delegators[d];
+          var to_account = d;
+          if(delegator.send_to) to_account = delegator.send_to;          
 
           if(has_sbd) {
             // Check if there is already an SBD withdrawal to this account
             var withdrawal = withdrawals.find(w => w.to == to_account && w.currency == 'SBD');
+            var perc_sbd = parseFloat(delegator.sbd_reward_percentage) / 100;
+            perc_sbd = perc_sbd < 0 ? 0 : (perc_sbd>1 ? 1 : perc_sbd);
+            var amountSBD = perc_sbd * sbd_bal * (withdrawal_account.stake / total_stake) * (parseFloat(delegator.vesting_shares) / total_vests) - 0.001;
+            amountSBD = amountSBD > 0 ? amountSBD : 0;
 
             if(withdrawal) {
-              withdrawal.amount += sbd_balance * (withdrawal_account.stake / total_stake) * (parseFloat(delegator.vesting_shares) / total_vests) - 0.001;
+              withdrawal.amount += amountSBD;
             } else {
               withdrawals.push({
                 to: to_account,
                 currency: 'SBD',
-                amount: sbd_balance * (withdrawal_account.stake / total_stake) * (parseFloat(delegator.vesting_shares) / total_vests) - 0.001
+                amount: amountSBD
               });
             }
           }
 
-          if(has_steem) {
+          if(has_steem || has_steem_power) {
             // Check if there is already a STEEM withdrawal to this account
             var withdrawal = withdrawals.find(w => w.to == to_account && w.currency == 'STEEM');
+            var perc_steem = parseFloat(delegator.sbd_reward_percentage) / 100;
+            var perc_sp = parseFloat(delegator.curation_reward_percentage) / 100;
+            perc_steem = perc_steem < 0 ? 0 : (perc_steem>1 ? 1 : perc_steem);            
+            perc_sp = perc_sp < 0 ? 0 : (perc_sp>1 ? 1 : perc_sp);
+            
+            var amount = perc_steem * steem_bal * (withdrawal_account.stake / total_stake) * (parseFloat(delegator.vesting_shares) / total_vests) - 0.001;
+            var amountSP = perc_sp * liquid_steem_power * (withdrawal_account.stake / total_stake) * (parseFloat(delegator.vesting_shares) / total_vests) - 0.001;
+            
+            amount = amount > 0 ? amount : 0;
+            amountSP = amountSP > 0 ? amountSP : 0;
 
             if(withdrawal) {
-              withdrawal.amount += steem_balance * (withdrawal_account.stake / total_stake) * (parseFloat(delegator.vesting_shares) / total_vests) - 0.001;
+              withdrawal.amount += amount;
+              withdrawal.amountSP += amountSP;
             } else {
               withdrawals.push({
                 to: to_account,
                 currency: 'STEEM',
-                amount: steem_balance * (withdrawal_account.stake / total_stake) * (parseFloat(delegator.vesting_shares) / total_vests) - 0.001
+                amount: amount,
+                amountSP: amountSP
               });
             }
           }
@@ -899,29 +911,39 @@ function processWithdrawals() {
         if(has_sbd) {
           // Check if there is already an SBD withdrawal to this account
           var withdrawal = withdrawals.find(w => w.to == withdrawal_account.name && w.currency == 'SBD');
+          var amountSBD = sbd_bal * withdrawal_account.stake / total_stake - 0.001;
+          amountSBD = amountSBD > 0 ? amountSBD : 0;
 
           if(withdrawal) {
-            withdrawal.amount += sbd_balance * withdrawal_account.stake / total_stake - 0.001;
+            withdrawal.amount += amountSBD;
           } else {
             withdrawals.push({
               to: withdrawal_account.name,
               currency: 'SBD',
-              amount: sbd_balance * withdrawal_account.stake / total_stake - 0.001
+              amount: amountSBD
             });
           }
         }
 
-        if(has_steem) {
+        if(has_steem || has_steem_power) {
           // Check if there is already a STEEM withdrawal to this account
           var withdrawal = withdrawals.find(w => w.to == withdrawal_account.name && w.currency == 'STEEM');
 
+          var amount = steem_bal * withdrawal_account.stake / total_stake - 0.001;
+          var amountSP = liquid_steem_power * withdrawal_account.stake / total_stake - 0.001;
+          
+          amount = amount > 0 ? amount : 0;
+          amountSP = amountSP > 0 ? amountSP : 0;
+          
           if(withdrawal) {
-            withdrawal.amount += steem_balance * withdrawal_account.stake / total_stake - 0.001;
+            withdrawal.amount += amount;
+            withdrawal.amountSP += amountSP;
           } else {
             withdrawals.push({
               to: withdrawal_account.name,
               currency: 'STEEM',
-              amount: steem_balance * withdrawal_account.stake / total_stake - 0.001
+              amount: amount,
+              amountSP: amountSP
             });
           }
         }
