@@ -226,38 +226,14 @@ function startVoting(bids) {
     return;
   }
 
-  // Sum the amounts of all of the bids
-  var total = bids.reduce(function(total, bid) {
-    return total + getUsdValue(bid);
-  }, 0);
+  var vote_value = utils.getVoteValue(100, account, 10000);
+  var vote_value_usd = vote_value / 2 * sbd_price + vote_value / 2;
+  
+  bid.weight = Math.round(10000 * roi * getUsdValue(bid)/vote_value_usd);
+  bid.weight = bid.weight > 10000 ? 10000 : bid.weight;
 
-  var bids_steem = utils.format(outstanding_bids.reduce(function(t, b) { return t + ((b.currency == 'STEEM') ? b.amount : 0); }, 0), 3);
-  var bids_sbd = utils.format(outstanding_bids.reduce(function(t, b) { return t + ((b.currency == 'SBD') ? b.amount : 0); }, 0), 3);
-  utils.log('=======================================================');
-  utils.log('Bidding Round End! Starting to vote! Total bids: ' + bids.length + ' - $' + total + ' | ' + bids_sbd + ' SBD | ' + bids_steem + ' STEEM');
-
-  var adjusted_weight = 1;
-
-  if(config.max_roi != null && config.max_roi != undefined && !isNaN(config.max_roi)) {
-    var vote_value = utils.getVoteValue(100, account, 10000);
-    var vote_value_usd = vote_value / 2 * sbd_price + vote_value / 2;
-    //min_total_bids_value_usd: calculates the minimum value in USD that the total bids must have to represent a maximum ROI defined in config.json
-    //'max_roi' in config.json = 10 represents a maximum ROI of 10%
-    var min_total_bids_value_usd = vote_value_usd * 0.75 * ((100 - config.max_roi) / 100 );
-    // calculates the value of the weight of the vote needed to give the maximum ROI defined
-    adjusted_weight = (total < min_total_bids_value_usd) ? (total / min_total_bids_value_usd) : 1;
-    utils.log('Total vote weight: ' + (config.batch_vote_weight * adjusted_weight));
-  }
-
-  utils.log('=======================================================');
-
-  for(var i = 0; i < bids.length; i++) {
-    // Calculate the vote weight to be used for each bid based on the amount bid as a percentage of the total bids
-    bids[i].weight = Math.round(config.batch_vote_weight * adjusted_weight * 100 * (getUsdValue(bids[i]) / total));
-  }
-
-  comment(bids.slice());
-  vote(bids);
+  sendComment(bid);
+  sendVote(bid,0);
 }
 
 function vote(bids) {
