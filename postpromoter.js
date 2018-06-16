@@ -3,7 +3,9 @@ const steem = require('steem');
 var utils = require('./utils');
 
 var account = null;
-var transactions = [];
+var sbd_balance = 0;
+var steem_balance = 0;
+var last_trans = 0;
 var outstanding_bids = [];
 var delegators = [];
 var last_round = [];
@@ -18,7 +20,7 @@ var use_delegators = false;
 var round_end_timeout = -1;
 var steem_price = 1;  // This will get overridden with actual prices if a price_feed_url is specified in settings
 var sbd_price = 1;    // This will get overridden with actual prices if a price_feed_url is specified in settings
-var version = '2.0.0';
+var version = '1.9.3';
 
 startup();
 
@@ -59,8 +61,8 @@ function startup() {
   if (fs.existsSync('state.json')) {
     var state = JSON.parse(fs.readFileSync("state.json"));
 
-    if (state.transactions)
-      transactions = state.transactions;
+    if (state.last_trans)
+      last_trans = state.last_trans;
 
     if (state.outstanding_bids)
       outstanding_bids = state.outstanding_bids;
@@ -73,12 +75,18 @@ function startup() {
 
     if(state.last_withdrawal)
       last_withdrawal = state.last_withdrawal;
+      
+    if(state.sbd_balance)
+      sbd_balance = parseFloat(state.sbd_balance);
+      
+    if(state.steem_balance)
+      steem_balance = parseFloat(state.steem_balance);
 
 		// Removed this for now since api.steemit.com is not returning more than 30 days of account history!
     //if(state.version != version)
     //  updateVersion(state.version, version);
 
-    utils.log('Restored saved bot state: ' + JSON.stringify({ last_trx_id: (transactions.length > 0 ? transactions[transactions.length - 1] : ''), bids: outstanding_bids.length, last_withdrawal: last_withdrawal }));
+    utils.log('Restored saved bot state: ' + JSON.stringify({ last_trans: last_trans, bids: outstanding_bids.length, last_withdrawal: last_withdrawal, sbd_balance: sbd_balance, steem_balance: steem_balance }));
   }
 
   // Check whether or not auto-withdrawals are set to be paid to delegators.
@@ -164,8 +172,11 @@ function startProcess() {
 				}
 
 				// Load transactions to the bot account
-        getTransactions(saveState);
-        
+				getTransactions();
+
+				// Save the state of the bot to disk
+				saveState();
+
 				// Check if there are any rewards to claim.
 				claimRewards();
 
@@ -319,22 +330,23 @@ function resteem(bid) {
 }
 
 function getTransactions(callback) {
-  var last_trx_id = null;
   var num_trans = 50;
 
   // If this is the first time the bot is ever being run, start with just the most recent transaction
-  if (first_load && transactions.length == 0) {
+  if (first_load && last_trans == 0) {
     utils.log('First run - starting with last transaction on account.');
+    num_trans = 1;
   }
 
   // If this is the first time the bot is run after a restart get a larger list of transactions to make sure none are missed
-  if (first_load && transactions.length > 0) {
-    utils.log('First run - loading all transactions since last transaction processed: ' + transactions[transactions.length - 1]);
-    last_trx_id = transactions[transactions.length - 1];
+  if (first_load && last_trans > 0) {
+    utils.log('First run - loading all transactions since bot was stopped.');
     num_trans = 1000;
   }
 
   steem.api.getAccountHistory(account.name, -1, num_trans, function (err, result) {
+    first_load = false;
+
     if (err || !result) {
       logError('Error loading account history: ' + err);
 
@@ -344,106 +356,67 @@ function getTransactions(callback) {
       return;
     }
 
-    // On first load, just record the list of the past 50 transactions so we don't double-process them.
-    if (first_load && transactions.length == 0) {
-      transactions = result.map(r => r[1].trx_id).filter(t => t != '0000000000000000000000000000000000000000');
-      first_load = false;
-
-      utils.log(transactions.length + ' previous trx_ids recorded.');
-
-      if(callback)
-        callback();
-
-      return;
-    }
-
-    first_load = false;
-    var reached_starting_trx = false;
-
     for (var i = 0; i < result.length; i++) {
       var trans = result[i];
       var op = trans[1].op;
 
-      // Don't need to process virtual ops
-      if(trans[1].trx_id == '0000000000000000000000000000000000000000')
-        continue;
+        // Check that this is a new transaction that we haven't processed already
+        if(trans[0] > last_trans) {
 
-      // Check that this is a new transaction that we haven't processed already
-      if(transactions.indexOf(trans[1].trx_id) < 0) {
+          // We only care about transfers to the bot
+          if (op[0] == 'transfer' && op[1].to == account.name) {
+            var amount = parseFloat(op[1].amount);
+            var currency = utils.getCurrency(op[1].amount);
+            utils.log("Incoming Bid! From: " + op[1].from + ", Amount: " + op[1].amount + ", memo: " + op[1].memo);
 
-        // If the bot was restarted after being stopped for a while, don't process transactions until we're past the last trx_id that was processed
-        if(last_trx_id && !reached_starting_trx) {
-          if(trans[1].trx_id == last_trx_id)
-            reached_starting_trx = true;
+            // Check for min and max bid values in configuration settings
+            var min_bid = config.min_bid ? parseFloat(config.min_bid) : 0;
+            var max_bid = config.max_bid ? parseFloat(config.max_bid) : 9999;
 
-          continue;
-        }
-
-        if(config.debug_logging)
-          utils.log('Processing Transaction: ' + JSON.stringify(trans));
-
-        // We only care about transfers to the bot
-        if (op[0] == 'transfer' && op[1].to == config.account) {
-          var amount = parseFloat(op[1].amount);
-          var currency = utils.getCurrency(op[1].amount);
-          utils.log("Incoming Bid! From: " + op[1].from + ", Amount: " + op[1].amount + ", memo: " + op[1].memo);
-
-          // Check for min and max bid values in configuration settings
-          var min_bid = config.min_bid ? parseFloat(config.min_bid) : 0;
-          var max_bid = config.max_bid ? parseFloat(config.max_bid) : 9999;
-          var max_bid_whitelist = config.max_bid_whitelist ? parseFloat(config.max_bid_whitelist) : 9999;
-
-          if(config.disabled_mode) {
-            // Bot is disabled, refund all Bids
-            refund(op[1].from, amount, currency, 'bot_disabled');
-          } else if(amount < min_bid) {
-            // Bid amount is too low (make sure it's above the min_refund_amount setting)
-            if(!config.min_refund_amount || amount >= config.min_refund_amount)
-              refund(op[1].from, amount, currency, 'below_min_bid');
-            else {
-              utils.log('Invalid bid - below min bid amount and too small to refund.');
+            if(config.disabled_mode) {
+              // Bot is disabled, refund all Bids
+              refund(op[1].from, amount, currency, 'bot_disabled');
+            } else if(amount < min_bid) {
+              // Bid amount is too low (make sure it's above the min_refund_amount setting)
+              if(!config.min_refund_amount || amount >= config.min_refund_amount)
+                refund(op[1].from, amount, currency, 'below_min_bid');
+              else {
+                utils.log('Invalid bid - below min bid amount and too small to refund.');
+              }
+            } else if (amount > max_bid) {
+              // Bid amount is too high
+              refund(op[1].from, amount, currency, 'above_max_bid');
+            } else if(config.currencies_accepted && config.currencies_accepted.indexOf(currency) < 0) {
+              // Sent an unsupported currency
+              refund(op[1].from, amount, currency, 'invalid_currency');
+            } else {
+              // Bid amount is just right!
+              checkPost(op[1].memo, amount, currency, op[1].from, 0);
             }
-          } else if (amount > max_bid && whitelist.indexOf(op[1].from) < 0) {
-            // Bid amount is too high
-            refund(op[1].from, amount, currency, 'above_max_bid');
-          } else if (amount > max_bid_whitelist) {
-            // Bid amount is too high even for whitelisted users!
-            refund(op[1].from, amount, currency, 'above_max_bid_whitelist');
-          } else if(config.currencies_accepted && config.currencies_accepted.indexOf(currency) < 0) {
-            // Sent an unsupported currency
-            refund(op[1].from, amount, currency, 'invalid_currency');
-          } else {
-            // Bid amount is just right!
-            checkPost(op[1].memo, amount, currency, op[1].from, 0);
-          }
-        } else if(use_delegators && op[0] == 'delegate_vesting_shares' && op[1].delegatee == account.name) {
-          // If we are paying out to delegators, then update the list of delegators when new delegation transactions come in
-          var delegator = delegators.find(d => d.delegator == op[1].delegator);
+          } else if(use_delegators && op[0] == 'delegate_vesting_shares' && op[1].delegatee == account.name) {
+            // If we are paying out to delegators, then update the list of delegators when new delegation transactions come in
+            var delegator = delegators.find(d => d.delegator == op[1].delegator);
 
-          if(delegator)
-            delegator.new_vesting_shares = op[1].vesting_shares;
-          else {
-            delegator = { delegator: op[1].delegator, vesting_shares: 0, new_vesting_shares: op[1].vesting_shares };
-            delegators.push(delegator);
+            if(delegator)
+              delegator.new_vesting_shares = op[1].vesting_shares;
+            else {
+							delegator = { delegator: op[1].delegator, vesting_shares: 0, new_vesting_shares: op[1].vesting_shares };
+              delegators.push(delegator);
+						}
+
+            // Save the updated list of delegators to disk
+            saveDelegators();
+
+						// Check if we should send a delegation message
+						if(parseFloat(delegator.new_vesting_shares) > parseFloat(delegator.vesting_shares) && config.transfer_memos['delegation'] && config.transfer_memos['delegation'] != '')
+							refund(op[1].delegator, 0.001, 'SBD', 'delegation', 0, utils.vestsToSP(parseFloat(delegator.new_vesting_shares)).toFixed());
+
+            utils.log('*** Delegation Update - ' + op[1].delegator + ' has delegated ' + op[1].vesting_shares);
           }
 
-          // Save the updated list of delegators to disk
-          saveDelegators();
-
-          // Check if we should send a delegation message
-          if(parseFloat(delegator.new_vesting_shares) > parseFloat(delegator.vesting_shares) && config.transfer_memos['delegation'] && config.transfer_memos['delegation'] != '')
-            refund(op[1].delegator, 0.001, 'SBD', 'delegation', 0, utils.vestsToSP(parseFloat(delegator.new_vesting_shares)).toFixed());
-
-          utils.log('*** Delegation Update - ' + op[1].delegator + ' has delegated ' + op[1].vesting_shares);
+          // Save the ID of the last transaction that was processed.
+          last_trans = trans[0];
         }
-
-        // Save the ID of the last transaction that was processed.
-        transactions.push(trans[1].trx_id);
-
-        // Don't save more than the last 60 transaction IDs in the state
-        if(transactions.length > 60)
-          transactions.shift();
-      }
     }
 
     if (callback)
@@ -451,13 +424,13 @@ function getTransactions(callback) {
   });
 }
 
-function checkRoundFillLimit(round, amount, currency) {
+function checkRoundFillLimit(amount, currency) {
   if(config.round_fill_limit == null || config.round_fill_limit == undefined || isNaN(config.round_fill_limit))
     return false;
 
   var vote_value = utils.getVoteValue(100, account, 10000);
   var vote_value_usd = vote_value / 2 * sbd_price + vote_value / 2;
-  var bid_value = round.reduce(function(t, b) { return t + b.amount * ((b.currency == 'SBD') ? sbd_price : steem_price) }, 0);
+  var bid_value = outstanding_bids.reduce(function(t, b) { return t + b.amount * ((b.currency == 'SBD') ? sbd_price : steem_price) }, 0);
   var new_bid_value = amount * ((currency == 'SBD') ? sbd_price : steem_price);
 
   // Check if the value of the bids is over the round fill limit
@@ -491,8 +464,8 @@ function checkPost(memo, amount, currency, sender, retries) {
       return;
     }
 
-    // If this bot is whitelist-only then make sure the sender is on the whitelist
-    if(config.blacklist_settings.whitelist_only && whitelist.indexOf(sender) < 0) {
+    // If this bot is whitelist-only then make sure the author is on the whitelist
+    if(config.blacklist_settings.whitelist_only && whitelist.indexOf(author) < 0) {
       refund(sender, amount, currency, 'whitelist_only');
       return;
     }
@@ -576,14 +549,9 @@ function checkPost(memo, amount, currency, sender, retries) {
           }
         }
 
-        if(!push_to_next_round && checkRoundFillLimit(outstanding_bids, amount, currency)) {
-          if(checkRoundFillLimit(next_round, amount, currency)) {
-            refund(sender, amount, currency, 'next_round_full');
-            return;
-          } else {
-            push_to_next_round = true;
-            refund(sender, 0.001, currency, 'round_full');
-          }
+        if(!push_to_next_round && checkRoundFillLimit(amount, currency)) {
+          push_to_next_round = true;
+          refund(sender, 0.001, currency, 'round_full');
         }
 
         // Add the bid to the current round or the next round if the current one is full or the post is too new
@@ -616,6 +584,8 @@ function checkPost(memo, amount, currency, sender, retries) {
         } else {
           // All good - push to the array of valid bids for this round
           utils.log('Valid Bid - Amount: ' + amount + ' ' + currency + ', Title: ' + result.title);
+          if(currency == 'SBD') sbd_balance += amount;
+          if(currency == 'STEEM') steem_balance += amount;
           round.push({ amount: amount, currency: currency, sender: sender, author: result.author, permlink: result.permlink, url: result.url });
         }
 
@@ -690,13 +660,15 @@ function saveState() {
     outstanding_bids: outstanding_bids,
     last_round: last_round,
     next_round: next_round,
-    transactions: transactions,
+    last_trans: last_trans,
     last_withdrawal: last_withdrawal,
+    sbd_balance: sbd_balance.toFixed(3),
+    steem_balance: steem_balance.toFixed(3),
     version: version
   };
 
   // Save the state of the bot to disk
-  fs.writeFile('state.json', JSON.stringify(state, null, 2), function (err) {
+  fs.writeFile('state.json', JSON.stringify(state), function (err) {
     if (err)
       utils.log(err);
   });
@@ -751,7 +723,6 @@ function refund(sender, amount, currency, reason, retries, data) {
   memo = memo.replace(/{currency}/g, currency);
   memo = memo.replace(/{min_bid}/g, config.min_bid);
   memo = memo.replace(/{max_bid}/g, config.max_bid);
-  memo = memo.replace(/{max_bid_whitelist}/g, config.max_bid_whitelist);
   memo = memo.replace(/{account}/g, config.account);
   memo = memo.replace(/{owner}/g, config.owner_account);
   memo = memo.replace(/{min_age}/g, config.min_post_age);
@@ -844,8 +815,8 @@ function processWithdrawals() {
   if(config.backup_mode)
     return;
 
-  var has_sbd = config.currencies_accepted.indexOf('SBD') >= 0 && parseFloat(account.sbd_balance) > 0;
-  var has_steem = config.currencies_accepted.indexOf('STEEM') >= 0 && parseFloat(account.balance) > 0;
+  var has_sbd = config.currencies_accepted.indexOf('SBD') >= 0 && sbd_balance > 0;
+  var has_steem = config.currencies_accepted.indexOf('STEEM') >= 0 && steem_balance > 0;
 
   if (has_sbd || has_steem) {
 
@@ -899,12 +870,12 @@ function processWithdrawals() {
             var withdrawal = withdrawals.find(w => w.to == to_account && w.currency == 'SBD');
 
             if(withdrawal) {
-              withdrawal.amount += parseFloat(account.sbd_balance) * (withdrawal_account.stake / total_stake) * (parseFloat(delegator.vesting_shares) / total_vests) - 0.001;
+              withdrawal.amount += sbd_balance * (withdrawal_account.stake / total_stake) * (parseFloat(delegator.vesting_shares) / total_vests) - 0.001;
             } else {
               withdrawals.push({
                 to: to_account,
                 currency: 'SBD',
-                amount: parseFloat(account.sbd_balance) * (withdrawal_account.stake / total_stake) * (parseFloat(delegator.vesting_shares) / total_vests) - 0.001
+                amount: sbd_balance * (withdrawal_account.stake / total_stake) * (parseFloat(delegator.vesting_shares) / total_vests) - 0.001
               });
             }
           }
@@ -914,12 +885,12 @@ function processWithdrawals() {
             var withdrawal = withdrawals.find(w => w.to == to_account && w.currency == 'STEEM');
 
             if(withdrawal) {
-              withdrawal.amount += parseFloat(account.balance) * (withdrawal_account.stake / total_stake) * (parseFloat(delegator.vesting_shares) / total_vests) - 0.001;
+              withdrawal.amount += steem_balance * (withdrawal_account.stake / total_stake) * (parseFloat(delegator.vesting_shares) / total_vests) - 0.001;
             } else {
               withdrawals.push({
                 to: to_account,
                 currency: 'STEEM',
-                amount: parseFloat(account.balance) * (withdrawal_account.stake / total_stake) * (parseFloat(delegator.vesting_shares) / total_vests) - 0.001
+                amount: steem_balance * (withdrawal_account.stake / total_stake) * (parseFloat(delegator.vesting_shares) / total_vests) - 0.001
               });
             }
           }
@@ -930,12 +901,12 @@ function processWithdrawals() {
           var withdrawal = withdrawals.find(w => w.to == withdrawal_account.name && w.currency == 'SBD');
 
           if(withdrawal) {
-            withdrawal.amount += parseFloat(account.sbd_balance) * withdrawal_account.stake / total_stake - 0.001;
+            withdrawal.amount += sbd_balance * withdrawal_account.stake / total_stake - 0.001;
           } else {
             withdrawals.push({
               to: withdrawal_account.name,
               currency: 'SBD',
-              amount: parseFloat(account.sbd_balance) * withdrawal_account.stake / total_stake - 0.001
+              amount: sbd_balance * withdrawal_account.stake / total_stake - 0.001
             });
           }
         }
@@ -945,12 +916,12 @@ function processWithdrawals() {
           var withdrawal = withdrawals.find(w => w.to == withdrawal_account.name && w.currency == 'STEEM');
 
           if(withdrawal) {
-            withdrawal.amount += parseFloat(account.balance) * withdrawal_account.stake / total_stake - 0.001;
+            withdrawal.amount += steem_balance * withdrawal_account.stake / total_stake - 0.001;
           } else {
             withdrawals.push({
               to: withdrawal_account.name,
               currency: 'STEEM',
-              amount: parseFloat(account.balance) * withdrawal_account.stake / total_stake - 0.001
+              amount: steem_balance * withdrawal_account.stake / total_stake - 0.001
             });
           }
         }
@@ -1040,9 +1011,11 @@ function sendWithdrawal(withdrawal, retries, callback) {
         if(callback)
           callback();
       }
-    } else {
+    } else {    
       utils.log('$$$ Auto withdrawal: ' + formatted_amount + ' sent to @' + withdrawal.to);
-
+      if(withdrawal.currency == 'SBD') sbd_balance -= withdrawal.amount;
+      if(withdrawal.currency == 'STEEM') steem_balance -= withdrawal.amount;
+      
       if(callback)
         callback();
     }
@@ -1053,88 +1026,47 @@ function loadPrices() {
   // Require the "request" library for making HTTP requests
   var request = require("request");
 
-  if(config.price_source == 'coinmarketcap') {
-    // Load the price feed data
-    request.get('https://api.coinmarketcap.com/v1/ticker/steem/', function (e, r, data) {
-      try {
-        steem_price = parseFloat(JSON.parse(data)[0].price_usd);
+  // Load the price feed data
+  request.get('https://api.coinmarketcap.com/v1/ticker/steem/', function (e, r, data) {
+    try {
+      steem_price = parseFloat(JSON.parse(data)[0].price_usd);
 
-        utils.log("Loaded STEEM price: " + steem_price);
-      } catch (err) {
-        utils.log('Error loading STEEM price: ' + err);
-      }
-    });
+      utils.log("Loaded STEEM price: " + steem_price);
+    } catch (err) {
+      utils.log('Error loading STEEM price: ' + err);
+    }
+  });
 
-    // Load the price feed data
-    request.get('https://api.coinmarketcap.com/v1/ticker/steem-dollars/', function (e, r, data) {
-      try {
-        sbd_price = parseFloat(JSON.parse(data)[0].price_usd);
+  // Load the price feed data
+  request.get('https://api.coinmarketcap.com/v1/ticker/steem-dollars/', function (e, r, data) {
+    try {
+      sbd_price = parseFloat(JSON.parse(data)[0].price_usd);
 
-        utils.log("Loaded SBD price: " + sbd_price);
-      } catch (err) {
-        utils.log('Error loading SBD price: ' + err);
-      }
-    });
-  } else if (config.price_source && config.price_source.startsWith('http')) {
-    request.get(config.price_source, function (e, r, data) {
-      try {
-        sbd_price = parseFloat(JSON.parse(data).sbd_price);
-        steem_price = parseFloat(JSON.parse(data).steem_price);
-
-        utils.log("Loaded STEEM price: " + steem_price);
-        utils.log("Loaded SBD price: " + sbd_price);
-      } catch (err) {
-        utils.log('Error loading STEEM/SBD prices: ' + err);
-      }
-    });
-  } else {
-    // Load STEEM price in BTC from bittrex and convert that to USD using BTC price in coinmarketcap
-    request.get('https://api.coinmarketcap.com/v1/ticker/bitcoin/', function (e, r, data) {
-      request.get('https://bittrex.com/api/v1.1/public/getticker?market=BTC-STEEM', function (e, r, btc_data) {
-        try {
-          steem_price = parseFloat(JSON.parse(data)[0].price_usd) * parseFloat(JSON.parse(btc_data).result.Last);
-          utils.log('Loaded STEEM Price from Bittrex: ' + steem_price);
-        } catch (err) {
-          utils.log('Error loading STEEM price from Bittrex: ' + err);
-        }
-      });
-
-      request.get('https://bittrex.com/api/v1.1/public/getticker?market=BTC-SBD', function (e, r, btc_data) {
-        try {
-          sbd_price = parseFloat(JSON.parse(data)[0].price_usd) * parseFloat(JSON.parse(btc_data).result.Last);
-          utils.log('Loaded SBD Price from Bittrex: ' + sbd_price);
-        } catch (err) {
-          utils.log('Error loading SBD price from Bittrex: ' + err);
-        }
-      });
-    });
-  }
+      utils.log("Loaded SBD price: " + sbd_price);
+    } catch (err) {
+      utils.log('Error loading SBD price: ' + err);
+    }
+  });
 }
 
 function getUsdValue(bid) { return bid.amount * ((bid.currency == 'SBD') ? sbd_price : steem_price); }
 
 function logFailedBid(bid, message) {
-  try {
-    message = JSON.stringify(message);
+  if (message.indexOf('assert_exception') >= 0 && message.indexOf('ERR_ASSERTION') >= 0)
+    return;
 
-    if (message.indexOf('assert_exception') >= 0 && message.indexOf('ERR_ASSERTION') >= 0)
-      return;
+  var failed_bids = [];
 
-    var failed_bids = [];
+  if(fs.existsSync("failed-bids.json"))
+    failed_bids = JSON.parse(fs.readFileSync("failed-bids.json"));
 
-    if(fs.existsSync("failed-bids.json"))
-      failed_bids = JSON.parse(fs.readFileSync("failed-bids.json"));
+  bid.error = message;
+  failed_bids.push(bid);
 
-    bid.error = message;
-    failed_bids.push(bid);
-
-    fs.writeFile('failed-bids.json', JSON.stringify(failed_bids), function (err) {
-      if (err)
-        utils.log('Error saving failed bids to disk: ' + err);
-    });
-  } catch (err) {
-    utils.log(err);
-  }
+  fs.writeFile('failed-bids.json', JSON.stringify(failed_bids), function (err) {
+    if (err)
+      utils.log('Error saving failed bids to disk: ' + err);
+  });
 }
 
 function loadConfig() {
@@ -1179,9 +1111,6 @@ function loadConfig() {
 
 function failover() {
   if(config.rpc_nodes && config.rpc_nodes.length > 1) {
-    // Give it a minute after the failover to account for more errors coming in from the original node
-    setTimeout(function() { error_count = 0; }, 60 * 1000);
-
     var cur_node_index = config.rpc_nodes.indexOf(steem.api.options.url) + 1;
 
     if(cur_node_index == config.rpc_nodes.length)
@@ -1204,11 +1133,11 @@ function logError(message) {
   if (message.indexOf('assert_exception') < 0 && message.indexOf('ERR_ASSERTION') < 0)
     error_count++;
 
-  utils.log('Error Count: ' + error_count + ', Current node: ' + steem.api.options.url);
+  utils.log('Error Count: ' + error_count);
   utils.log(message);
 }
 
-// Check if 10+ errors have happened in a 3-minute period and fail over to next rpc node
+// Check if too many errors have happened in a 1-minute period and fail over to next rpc node
 function checkErrors() {
   if(error_count >= 10)
     failover();
@@ -1216,4 +1145,4 @@ function checkErrors() {
   // Reset the error counter
   error_count = 0;
 }
-setInterval(checkErrors, 3 * 60 * 1000);
+setInterval(checkErrors, 60 * 1000);
