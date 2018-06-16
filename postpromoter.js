@@ -236,37 +236,23 @@ function startVoting(bids) {
   sendVote(bid,0);
 }
 
-function vote(bids) {
-  // Get the first bid in the list
-  sendVote(bids.pop(), 0, function () {
-    // If there are more bids, vote on the next one after 10 seconds
-    if (bids.length > 0) {
-      setTimeout(function () { vote(bids); }, 5000);
-    } else {
-      setTimeout(function () {
-        utils.log('=======================================================');
-        utils.log('Voting Complete!');
-        utils.log('=======================================================');
-        isVoting = false;
-        first_load = true;
-      }, 5000);
-    }
-  });
-}
-
-function comment(bids) {
-  sendComment(bids.pop());
-
-  if(bids.length > 0)
-    setTimeout(function () { comment(bids); }, 30000);
-}
-
 function sendVote(bid, retries, callback) {
   utils.log('Bid Weight: ' + bid.weight);
   steem.broadcast.vote(config.posting_key, account.name, bid.author, bid.permlink, bid.weight, function (err, result) {
     if (!err && result) {
       utils.log(utils.format(bid.weight / 100) + '% vote cast for: @' + bid.author + '/' + bid.permlink);
 
+      isVoting = false;
+      first_load = true;
+      
+      var id = outstanding_bids.findIndex(function(b){return b.author == bid.author && b.permlink == bid.permlink});
+      if(id >= 0){
+        outstanding_bids.splice(id,1);
+        saveState();
+      }else{
+        utils.log("Error trying to remove bid from outstanding_bids: Not found");
+      }
+      
       if (callback)
         callback();
     } else {
