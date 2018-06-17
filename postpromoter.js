@@ -455,16 +455,17 @@ function getTransactions(callback) {
             // If we are paying out to delegators, then update the list of delegators when new delegation transactions come in
             
             //var delegator = delegators.find(d => d.delegator == op[1].delegator);
-            var delegator = delegators[op[1].delegator];
+            var d = dot2comma(op[1].delegator);
+            var delegator = delegators[d];
 
             if(delegator){
               delegator.new_vesting_shares = op[1].vesting_shares;
-              firebase.database().ref(config.account+'/delegators/'+op[1].delegator+'/new_vesting_shares').set(op[1].vesting_shares);
+              firebase.database().ref(config.account+'/delegators/'+d+'/new_vesting_shares').set(op[1].vesting_shares);
             }else {
 			  delegator = { vesting_shares: 0, new_vesting_shares: op[1].vesting_shares, sbd_reward_percentage: 100, curation_reward_percentage: 100 };
-              delegators[op[1].delegator] = delegator;
-              //delegators.push(delegator);
-              firebase.database().ref(config.account+'/delegators/'+op[1].delegator).set(delegator);
+              delegators[d] = delegator;
+              
+              firebase.database().ref(config.account+'/delegators/'+d).set(delegator);
 			}
 
             // Save the updated list of delegators to disk
@@ -915,8 +916,8 @@ function processWithdrawals() {
         //for(var j = 0; j < delegators.length; j++) {
         for(var d in delegators){
           var delegator = delegators[d];
-          var to_account = d;
-          if(delegator.send_to) to_account = delegator.send_to;          
+          var to_account = comma2dot(d);
+          if(delegator.send_to) to_account = comma2dot(delegator.send_to);
 
           if(has_sbd) {
             // Check if there is already an SBD withdrawal to this account
