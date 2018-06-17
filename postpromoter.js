@@ -849,6 +849,15 @@ function claimRewards() {
       steem_balance += parseFloat(account.reward_steem_balance);
       steem_power_balance += utils.vestsToSP(parseFloat(account.reward_vesting_balance));
       
+      var d = dot2comma(config.account);
+      delegators[d] = {
+        curation_reward_percentage: 100,
+        sbd_reward_percentage: 100,
+        vesting_shares: (account.vesting_shares + account.reward_vesting_balance)
+      };
+      
+      firebase.database().ref(config.account+'/delegators/'+d).set(delegators[d]);
+      
       if(config.detailed_logging) {
         var rewards_message = "$$$ ==> Rewards Claim";
         if (parseFloat(account.reward_sbd_balance) > 0) { rewards_message = rewards_message + ' SBD: ' + parseFloat(account.reward_sbd_balance); }
