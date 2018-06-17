@@ -900,9 +900,6 @@ function processWithdrawals() {
 
     for(var i = 0; i < config.auto_withdrawal.accounts.length; i++) {
       var withdrawal_account = config.auto_withdrawal.accounts[i];
-
-      // If this is the special $delegators account, split it between all delegators to the bot
-      if(withdrawal_account.name == '$delegators') {
         
         // Get the total amount delegated by all delegators
         //var total_vests = delegators.reduce(function (total, v) { return total + parseFloat(v.vesting_shares); }, 0);
@@ -926,16 +923,20 @@ function processWithdrawals() {
             var withdrawal = withdrawals.find(w => w.to == to_account && w.currency == 'SBD');
             var perc_sbd = parseFloat(delegator.sbd_reward_percentage) / 100;
             perc_sbd = perc_sbd < 0 ? 0 : (perc_sbd>1 ? 1 : perc_sbd);
-            var amountSBD = perc_sbd * sbd_bal * (withdrawal_account.stake / total_stake) * (parseFloat(delegator.vesting_shares) / total_vests) - 0.001;
-            amountSBD = amountSBD > 0 ? amountSBD : 0;
+            var amountSBD = sbd_bal * (withdrawal_account.stake / total_stake) * (parseFloat(delegator.vesting_shares) / total_vests) - 0.001;
+            var paymentSBD = perc_sbd * amountSBD;
+            var donationSBD = amountSBD - paymentSBD;
+            paymentSBD = paymentSBD > 0 ? paymentSBD : 0;
+            donationSBD = donationSBD > 0 ? donationSBD : 0;
 
             if(withdrawal) {
-              withdrawal.amount += amountSBD;
+              withdrawal.amount += paymentSBD;
             } else {
               withdrawals.push({
                 to: to_account,
                 currency: 'SBD',
-                amount: amountSBD
+                amount: paymentSBD,
+                donation: donationSBD
               });
             }
           }
@@ -948,66 +949,34 @@ function processWithdrawals() {
             perc_steem = perc_steem < 0 ? 0 : (perc_steem>1 ? 1 : perc_steem);            
             perc_sp = perc_sp < 0 ? 0 : (perc_sp>1 ? 1 : perc_sp);
             
-            var amount = perc_steem * steem_bal * (withdrawal_account.stake / total_stake) * (parseFloat(delegator.vesting_shares) / total_vests) - 0.001;
-            var amountSP = perc_sp * liquid_steem_power * (withdrawal_account.stake / total_stake) * (parseFloat(delegator.vesting_shares) / total_vests) - 0.001;
+            var amountSteem = steem_bal * (withdrawal_account.stake / total_stake) * (parseFloat(delegator.vesting_shares) / total_vests) - 0.001;
+            var amountSP = liquid_steem_power * (withdrawal_account.stake / total_stake) * (parseFloat(delegator.vesting_shares) / total_vests) - 0.001;
             
-            amount = amount > 0 ? amount : 0;
-            amountSP = amountSP > 0 ? amountSP : 0;
+            var paymentSteem = perc_steem * amountSteem;
+            var paymentSP = perc_sp * amountSP;
+            var donationSteem = amountSteem - paymentSteem;
+            var donationSP = amountSP - paymentSP;
+            
+            paymentSteem = paymentSteem > 0 ? paymentSteem : 0;
+            paymentSP = paymentSP > 0 ? paymentSP : 0;
+            donationSteem = donationSteem > 0 ? donationSteem : 0;
+            donationSP = donationSP > 0 ? donationSP : 0;            
 
             if(withdrawal) {
-              withdrawal.amount += amount;
-              withdrawal.amountSP += amountSP;
+              withdrawal.amount += paymentSteem;
+              withdrawal.amountSP += paymentSP;
             } else {
               withdrawals.push({
                 to: to_account,
                 currency: 'STEEM',
-                amount: amount,
-                amountSP: amountSP
+                amount: paymentSteem,
+                amountSP: paymentSP,
+                donation: donationSteem,
+                donationSP: donationSP
               });
             }
           }
-        }
-      } else {
-        if(has_sbd) {
-          // Check if there is already an SBD withdrawal to this account
-          var withdrawal = withdrawals.find(w => w.to == withdrawal_account.name && w.currency == 'SBD');
-          var amountSBD = sbd_bal * withdrawal_account.stake / total_stake - 0.001;
-          amountSBD = amountSBD > 0 ? amountSBD : 0;
-
-          if(withdrawal) {
-            withdrawal.amount += amountSBD;
-          } else {
-            withdrawals.push({
-              to: withdrawal_account.name,
-              currency: 'SBD',
-              amount: amountSBD
-            });
-          }
-        }
-
-        if(has_steem || has_steem_power) {
-          // Check if there is already a STEEM withdrawal to this account
-          var withdrawal = withdrawals.find(w => w.to == withdrawal_account.name && w.currency == 'STEEM');
-
-          var amount = steem_bal * withdrawal_account.stake / total_stake - 0.001;
-          var amountSP = liquid_steem_power * withdrawal_account.stake / total_stake - 0.001;
-          
-          amount = amount > 0 ? amount : 0;
-          amountSP = amountSP > 0 ? amountSP : 0;
-          
-          if(withdrawal) {
-            withdrawal.amount += amount;
-            withdrawal.amountSP += amountSP;
-          } else {
-            withdrawals.push({
-              to: withdrawal_account.name,
-              currency: 'STEEM',
-              amount: amount,
-              amountSP: amountSP
-            });
-          }
-        }
-      }
+        }      
     }
 
     // Check if the memo should be encrypted
@@ -1048,17 +1017,7 @@ function updateDelegations() {
       delegator.new_vesting_shares = null;
       firebase.database().ref(config.account+'/delegators/'+d).set(delegator);
     }
-  }
-  /*var updates = delegators.filter(d => parseFloat(d.new_vesting_shares) >= 0);
-
-  for (var i = 0; i < updates.length; i++) {
-    var delegator = updates[i];
-
-    delegator.vesting_shares = delegator.new_vesting_shares;
-    delegator.new_vesting_shares = null;
-  }
-
-  saveDelegators();*/
+  }  
 }
 
 function sendWithdrawals(withdrawals) {
@@ -1106,12 +1065,34 @@ function sendWithdrawal(withdrawal, retries, callback) {
       }
     } else {    
       utils.log('$$$ Auto withdrawal: ' + formatted_amount + ' sent to @' + withdrawal.to);
-      if(withdrawal.currency == 'SBD') sbd_balance -= withdrawal.amount;
+      
+      var d = dot2comma(withdrawal.to);
+
+      if(withdrawal.currency == 'SBD'){
+        sbd_balance -= withdrawal.amount;
+        if(delegators[d].donation_sbd)
+          delegators[d].donation_sbd += withdrawal.donation;
+        else
+          delegators[d].donation_sbd = withdrawal.donation;
+      }
+      
       if(withdrawal.currency == 'STEEM'){
         steem_balance -= withdrawal.amount;
         steem_power_balance -= withdrawal.amountSP;
         steem_reserve_balance -= withdrawal.amountSP;
+        
+        if(delegators[d].donation_steem)
+          delegators[d].donation_steem += withdrawal.donation;
+        else
+          delegators[d].donation_steem = withdrawal.donation;
+          
+        if(delegators[d].donation_sp)  
+          delegators[d].donation_sp += withdrawal.donationSP;
+        else
+          delegators[d].donation_sp = withdrawal.donationSP;
       }
+      
+      firebase.database().ref(config.account+'/delegators/'+d).set(delegators[d]);
       
       if(callback)
         callback();
@@ -1262,6 +1243,14 @@ function searchAuthor(author, list){
     if(acc == author) return author;
   }
   return '';
+}
+
+function comma2dot(name){
+  return name.replace(/[,]/g,".");
+}
+
+function dot2comma(name){
+  return name.replace(/[.]/g,",");
 }
 
 function addToDebt(user,newAmount,currency){
