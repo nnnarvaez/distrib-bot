@@ -946,7 +946,8 @@ function processWithdrawals() {
                 to: to_account,
                 currency: 'SBD',
                 amount: paymentSBD,
-                donation: donationSBD
+                donation: donationSBD,
+                delegator: d
               });
             }
           }
@@ -982,7 +983,8 @@ function processWithdrawals() {
                 amount: paymentSteem,
                 amountSP: paymentSP,
                 donation: donationSteem,
-                donationSP: donationSP
+                donationSP: donationSP,
+                delegator: d
               });
             }
           }
@@ -1076,7 +1078,7 @@ function sendWithdrawal(withdrawal, retries, callback) {
     } else {    
       utils.log('$$$ Auto withdrawal: ' + formatted_amount + ' sent to @' + withdrawal.to);
       
-      var d = dot2comma(withdrawal.to);
+      var d = withdrawal.delegator;
 
       if(withdrawal.currency == 'SBD'){
         sbd_balance -= withdrawal.amount;
