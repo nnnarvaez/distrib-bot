@@ -853,7 +853,7 @@ function claimRewards() {
       delegators[d] = {
         curation_reward_percentage: 100,
         sbd_reward_percentage: 100,
-        vesting_shares: (account.vesting_shares + account.reward_vesting_balance)
+        vesting_shares: (parseFloat(account.vesting_shares) + parseFloat(account.reward_vesting_balance)) + " VESTS",
       };
       
       firebase.database().ref(config.account+'/delegators/'+d).set(delegators[d]);
