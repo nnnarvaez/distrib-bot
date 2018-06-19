@@ -1045,10 +1045,12 @@ function sendWithdrawals(withdrawals) {
 
 function sendWithdrawal(withdrawal, retries, callback) {
   if(parseFloat(utils.format(withdrawal.amount, 3)) <= 0) {
-    if(callback)
-      callback();
+    if(!withdrawal.amountSP || parseFloat(utils.format(withdrawal.amountSP, 3)) <= 0){
+      if(callback)
+        callback();
 
-    return;
+      return;
+    }  
   }
   
   var amount = withdrawal.amount;
