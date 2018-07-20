@@ -5,12 +5,12 @@ var firebase = require('firebase-admin');
 var firebaseServiceAccount = require('./firebase-credentials.json');
 
 var account = null;
+var transactions = [];
 var sbd_balance = 0;
 var steem_balance = 0;
 var steem_power_balance = 0;
 var steem_reserve_balance = 0;
 var sbd_reserve_balance = 0;
-var last_trans = 0;
 var outstanding_bids = [];
 var delegators = [];
 var last_round = [];
@@ -231,8 +231,10 @@ function startProcess() {
 }
 
 function loadState(){  
-  if (state.last_trans)
-    last_trans = state.last_trans;
+  /*if (state.last_trans)
+    last_trans = state.last_trans;*/
+  if (state.transactions)
+      transactions = state.transactions;  
 
   if (state.outstanding_bids)
     outstanding_bids = state.outstanding_bids;
@@ -264,7 +266,7 @@ function loadState(){
   if(state.sbd_reserve_balance)
     sbd_reserve_balance = parseFloat(state.sbd_reserve_balance);
     
-  utils.log('Restored saved bot state: ' + JSON.stringify({ last_trans: last_trans, bids: outstanding_bids.length, last_withdrawal: last_withdrawal, sbd_balance: sbd_balance, steem_balance: steem_balance, steem_power_balance: steem_power_balance, steem_reserve_balance: steem_reserve_balance, sbd_reserve_balance: sbd_reserve_balance }));
+  utils.log('Restored saved bot state: ' + JSON.stringify({ last_trx_id: (transactions.length > 0 ? transactions[transactions.length - 1] : ''), bids: outstanding_bids.length, last_withdrawal: last_withdrawal, sbd_balance: sbd_balance, steem_balance: steem_balance, steem_power_balance: steem_power_balance, steem_reserve_balance: steem_reserve_balance, sbd_reserve_balance: sbd_reserve_balance })); 
 }
 
 function startVoting(bid) {
@@ -286,7 +288,7 @@ function startVoting(bid) {
 
 function sendVote(bid, retries, callback) {
   utils.log('Bid Weight: ' + bid.weight);
-  steem.broadcast.vote(config.posting_key, account.name, bid.author, bid.permlink, bid.weight, function (err, result) {
+  steem.broadcast.vote(config.posting_key, config.account, bid.author, bid.permlink, bid.weight, function (err, result) {
     if (!err && result) {
       utils.log(utils.format(bid.weight / 100) + '% vote cast for: @' + bid.author + '/' + bid.permlink);
 
@@ -342,7 +344,7 @@ function sendComment(bid) {
     content = content.replace(/\{weight\}/g, utils.format(bid.weight / 100)).replace(/\{botname\}/g, config.account).replace(/\{sender\}/g, bid.sender);
 
     // Broadcast the comment
-    steem.broadcast.comment(config.posting_key, bid.author, bid.permlink, account.name, permlink, permlink, content, '{"app":"postpromoter/' + version + '"}', function (err, result) {
+    steem.broadcast.comment(config.posting_key, bid.author, bid.permlink, config.account, permlink, permlink, content, '{"app":"postpromoter/' + version + '"}', function (err, result) {
       if (!err && result) {
         utils.log('Posted comment: ' + permlink);
       } else {
@@ -373,23 +375,22 @@ function resteem(bid) {
 }
 
 function getTransactions(callback) {
+  var last_trx_id = null;
   var num_trans = 50;
 
   // If this is the first time the bot is ever being run, start with just the most recent transaction
-  if (first_load && last_trans == 0) {
-    utils.log('First run - starting with last transaction on account.');
-    num_trans = 1;
+  if (first_load && transactions.length == 0) {
+    utils.log('First run - starting with last transaction on account.');    
   }
 
   // If this is the first time the bot is run after a restart get a larger list of transactions to make sure none are missed
-  if (first_load && last_trans > 0) {
-    utils.log('First run - loading all transactions since bot was stopped.');
+  if (first_load && transactions.length > 0) {
+    utils.log('First run - loading all transactions since last transaction processed: ' + transactions[transactions.length - 1]);
+    last_trx_id = transactions[transactions.length - 1];
     num_trans = 1000;
   }
 
-  steem.api.getAccountHistory(account.name, -1, num_trans, function (err, result) {
-    first_load = false;
-
+  steem.api.getAccountHistory(config.account, -1, num_trans, function (err, result) {
     if (err || !result) {
       logError('Error loading account history: ' + err);
 
@@ -398,20 +399,44 @@ function getTransactions(callback) {
 
       return;
     }
+    
+    // On first load, just record the list of the past 50 transactions so we don't double-process them.
+    if (first_load && transactions.length == 0) {
+      transactions = result.map(r => r[1].trx_id).filter(t => t != '0000000000000000000000000000000000000000');
+      first_load = false;
+
+      utils.log(transactions.length + ' previous trx_ids recorded.');
+
+      if(callback)
+        callback();
+
+      return;
+    }
+    
+    first_load = false;
+    var reached_starting_trx = false;
 
     for (var i = 0; i < result.length; i++) {
       var trans = result[i];
       var op = trans[1].op;
       
-        if(trans[0] > last_trans + 1) {
-          utils.log('***** MISSED TRANSACTION(S) - last_trans: ' + last_trans + ', current_trans: ' + trans[0]);
+      // Don't need to process virtual ops
+      if(trans[1].trx_id == '0000000000000000000000000000000000000000')
+        continue;
+
+      // Check that this is a new transaction that we haven't processed already
+      if(transactions.indexOf(trans[1].trx_id) < 0) {
+
+        // If the bot was restarted after being stopped for a while, don't process transactions until we're past the last trx_id that was processed
+        if(last_trx_id && !reached_starting_trx) {
+          if(trans[1].trx_id == last_trx_id)
+            reached_starting_trx = true;
+
+          continue;
         }
 
-        // Check that this is a new transaction that we haven't processed already
-        if(trans[0] > last_trans) {
-
           // We only care about transfers to the bot
-          if (op[0] == 'transfer' && op[1].to == account.name) {
+          if (op[0] == 'transfer' && op[1].to == config.account) {
             var amount = parseFloat(op[1].amount);
             var currency = utils.getCurrency(op[1].amount);
             
@@ -451,7 +476,7 @@ function getTransactions(callback) {
                 checkPost(op[1].memo, amount, currency, op[1].from, 0);
               }
             }  
-          } else if(use_delegators && op[0] == 'delegate_vesting_shares' && op[1].delegatee == account.name) {
+          } else if(use_delegators && op[0] == 'delegate_vesting_shares' && op[1].delegatee == config.account) {
             // If we are paying out to delegators, then update the list of delegators when new delegation transactions come in
             
             //var delegator = delegators.find(d => d.delegator == op[1].delegator);
@@ -479,7 +504,11 @@ function getTransactions(callback) {
           }
 
           // Save the ID of the last transaction that was processed.
-          last_trans = trans[0];
+          transactions.push(trans[1].trx_id);
+
+          // Don't save more than the last 60 transaction IDs in the state
+          if(transactions.length > 60)
+            transactions.shift();
         }
     }
 
@@ -582,7 +611,7 @@ function checkPost(memo, amount, currency, sender, retries) {
             var time_until_vote = utils.timeTilFullPower(utils.getVotingPower(account));
 
             // Get the list of votes on this post to make sure the bot didn't already vote on it (you'd be surprised how often people double-submit!)
-            var votes = result.active_votes.filter(function(vote) { return vote.voter == account.name; });
+            var votes = result.active_votes.filter(function(vote) { return vote.voter == config.account; });
 
             if (votes.length > 0 || (new Date() - created) >= (config.max_post_age * 60 * 60 * 1000)) {
                 // This post is already voted on by this bot or the post is too old to be voted on
@@ -739,7 +768,7 @@ function saveState() {
     outstanding_bids: outstanding_bids,
     last_round: last_round,
     next_round: next_round,
-    last_trans: last_trans,
+    transactions: transactions,
     last_withdrawal: last_withdrawal,
     sbd_balance: sbd_balance.toFixed(3),
     steem_balance: steem_balance.toFixed(3),
