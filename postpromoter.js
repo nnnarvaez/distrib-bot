@@ -313,7 +313,7 @@ function sendVote(bid, retries, callback) {
         setTimeout(function() { sendVote(bid, retries + 1, callback); }, 10000);
       else {
         utils.log('============= Vote transaction failed three times for: @' + bid.author + '/' + bid.permlink + ' Bid Amount: ' + bid.amount + ' ' + bid.currency + ' ===============');
-        logFailedBid(bid, err);
+        //logFailedBid(bid, err);
         
         isVoting = false;
         first_load = true;
@@ -445,10 +445,10 @@ function getTransactions(callback) {
               if(currency == 'STEEM') steem_reserve_balance += amount;                
               if(currency == 'SBD') sbd_reserve_balance += amount;                
               addToDebt(op[1].from,amount,currency);
-            }else{
+            }else if(op[1].memo.substring(0,4).toLowerCase() == 'http'){
               //Incoming Bid
             
-              utils.log("Incoming Bid! From: " + op[1].from + ", Amount: " + op[1].amount + ", memo: " + op[1].memo);
+              utils.log("Incoming Bid! " + trans[1].trx_id +". From: " + op[1].from + ", Amount: " + op[1].amount + ", memo: " + op[1].memo);
 
               // Check for min and max bid values in configuration settings
               limitbids = getMinMaxBid(currency);
