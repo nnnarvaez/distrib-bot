@@ -1,0 +1,33 @@
+{
+    "dist-db": {
+        "whitelist": {
+            "meyouanyone": {
+                "last_bid": 1551957648
+            }
+        },
+        "state": {
+            "roi": 1.5,
+            "transactions": [],
+            "outstanding_bids": [],
+            "sbd_balance": "0.000 SBD",
+            "steem_balance": "0.000 STEEM",
+            "steem_power_balance": "0.000 STEEM",
+            "steem_reserve_balance": "0.000 STEEM",
+            "sbd_reserve_balance": "0.000 SBD"
+        },
+        "max_bid_sbd": 20,
+        "min_bid_sbd": 0.100,
+        "delegators": {
+            "delegator1": {
+                "vesting_shares": "1000.000000 VESTS",
+                "sbd_reward_percentage": 100
+            }
+        },
+        "debt": {
+            "loanertopowerdown": {
+                "steem": "0.000 STEEM",
+                "sbd": "0.000 SBD"
+            }
+        }
+    }
+}
