@@ -2,8 +2,8 @@
 
 ## Installation
 ```
-$ git clone https://github.com/nnnarvaez/distrib-bot.git
-$ npm install
+git clone https://github.com/nnnarvaez/distrib-bot.git \
+npm install \
 ```
 
 ## Configuration
