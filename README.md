@@ -1,8 +1,8 @@
-# Post Promoter - Steem Bid-Based Voting Bot
+# Distribution BOT - Steem Bid-Based Distribution Bot
 
 ## Installation
 ```
-$ git clone https://github.com/MattyIce/postpromoter.git
+$ git clone https://github.com/nnnarvaez/ocdb-bot.git
 $ npm install
 ```
 
