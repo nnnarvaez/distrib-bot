@@ -2,7 +2,7 @@
 
 ## Installation
 ```
-$ git clone https://github.com/nnnarvaez/ocdb-bot.git
+$ git clone https://github.com/nnnarvaez/distrib-bot.git
 $ npm install
 ```
 
