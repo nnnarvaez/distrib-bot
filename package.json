@@ -1,7 +1,7 @@
 {
-  "name": "postpromoter",
-  "version": "2.0.0",
-  "description": "Steem bid-based voting bot written in JavaScript",
+  "name": "distributionBOT",
+  "version": "1.0.0",
+  "description": "Steem bid-based distribution bot written in JavaScript",
   "main": "index.js",
   "scripts": {
     "test": "echo \"Error: no test specified\" && exit 1"
