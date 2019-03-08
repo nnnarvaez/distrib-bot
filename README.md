@@ -1,5 +1,5 @@
 # Distribution BOT - Steem Bid-Based Distribution Bot
-
+Created by:  Julian Jotica From Postpromoter code
 ## Installation
 ```
 git clone https://github.com/nnnarvaez/distrib-bot.git\
